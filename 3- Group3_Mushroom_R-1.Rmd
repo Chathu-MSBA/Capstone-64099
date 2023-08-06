@@ -1,0 +1,460 @@
+---
+title: "Capstone_0609"
+author: "wliu16"
+date: "2023-06-09"
+output: pdf_document
+---
+
+```{r, include = FALSE}
+library(dplyr)
+library(caret) 
+library(corrplot) # Correlation for int
+library(glmnet) 
+library(gridExtra) # ggplots
+library(tidyr) 
+library(FactoMineR) # MCA, PCA for categorical
+library(factoextra) # MCA
+```
+
+```{r}
+#Remove large object
+rm(list=ls()) 
+gc() # Garbage collection
+```
+
+
+```{r}
+setwd("/Users/tammyliu/Desktop/MSBA/Capstone") # Set working directory
+df <- read.csv("mushrooms.csv") # Load the data
+head(df)
+```
+
+```{r}
+str(df) # Classification dataset of 8124 records and 23 variables, 21 chr and 2 int
+```
+
+Data Cleaning, remove na and outliers
+```{r}
+# Check for missing values - avg number of missing values per column
+colMeans(is.na(df)) 
+
+# Check for outliers
+boxplot(df$ring_number) # NONE. Ring_number is the only numeric
+
+# Ratio of target variable and barchart
+count_class <- table(df$poisonous)
+prop.table(count_class)*100
+print(paste("Count of edible (0) vs poisonous (1) mushroom is"))
+print(count_class)
+
+
+barplot(count_class,
+        main = "Edible vs Poisonous mushroom",
+        ylab = "Count",
+        col = "black",
+        cex.names = 0.1,
+        cex.axis = 0.8,
+        width = 0.001) #“0” means “edible” and “1” means “poisonous” mushrooms
+```
+
+```{r}
+# Review categorical variables
+unique(df$cap_shape)
+unique(df$cap_surface)
+unique(df$cap_color)
+unique(df$bruises)
+unique(df$odor)
+unique(df$gill_attachment)
+unique(df$gill_spacing)
+unique(df$gill_size)
+unique(df$gill_color)
+unique(df$stalk_shape)
+unique(df$stalk_root)
+unique(df$stalk_surface_above_ring)
+unique(df$stalk_surface_below_ring)
+unique(df$stalk_color_above_ring)
+unique(df$stalk_color_below_ring)
+unique(df$veil_type)
+unique(df$veil_color)
+unique(df$ring_type)
+unique(df$spore_point_color)
+unique(df$population)
+unique(df$habitat)
+
+df <- df[, -16] # Remove veil_type as all data are same
+```
+
+Explore visual relationships
+
+```{r}
+# Visualization_1: stacked bars
+
+variables <- c("cap_shape", "cap_surface", "cap_color", "bruises", "odor", 
+               "gill_attachment", "gill_spacing", "gill_size", "gill_color", 
+               "stalk_shape", "stalk_root", "stalk_surface_above_ring", 
+               "stalk_surface_below_ring", "stalk_color_above_ring", 
+               "stalk_color_below_ring", "veil_color", 
+               "ring_number", "ring_type", "spore_point_color", "population", 
+               "habitat")
+
+plot_list <- list()
+
+for (column in variables) {
+  plot <- ggplot(df, aes(x = .data[[column]], fill = factor(poisonous))) +
+    geom_bar() +
+    labs(x = column, y = "Count", fill = "Poisonous") +
+    ggtitle(paste("Bar Plot:", column, "vs Poisonous")) +
+    scale_fill_grey()
+
+  plot_list[[column]] <- plot
+}
+
+displaysb1 <- do.call(gridExtra::grid.arrange, c(plot_list[1:6], ncol = 3))
+displaysb2 <- do.call(gridExtra::grid.arrange, c(plot_list[7:12], ncol = 3))
+displaysb3 <- do.call(gridExtra::grid.arrange, c(plot_list[13:18], ncol = 3))
+displaysb4 <- do.call(gridExtra::grid.arrange, c(plot_list[19:22], ncol = 3))
+```
+
+
+```{r}
+# Visualization_2: scatterplots
+
+for (column in variables) {
+  plot <- ggplot(df, aes(x = .data[[column]], y = factor(poisonous))) +
+    geom_jitter(width = 0.2, height = 0.2) +
+    labs(x = column, y = "Poisonous") +
+    ggtitle(paste("Scatter Plot:", column, "vs Poisonous"))
+
+  plot_list[[column]] <- plot
+}
+
+display1 <- do.call(gridExtra::grid.arrange, c(plot_list[1:6], ncol = 3))
+display2 <- do.call(gridExtra::grid.arrange, c(plot_list[7:12], ncol = 3))
+display3 <- do.call(gridExtra::grid.arrange, c(plot_list[13:18], ncol = 3))
+display4 <- do.call(gridExtra::grid.arrange, c(plot_list[19:22], ncol = 3))
+```
+Determine Variable Importance
+Method : MCA (Multiple Correspondence Analysis) (as data consist solely of categorical variables)
+```{r}
+# Multiple Correspondence Analysis (MCA)
+# MCA only applies to factors
+df[] <- lapply(df, as.factor)
+
+# Run Multiple Correspondence Analysis (MCA)
+res.mca <- MCA(df, graph = FALSE)
+
+# Visualize the results
+fviz_mca_var(res.mca, repel = TRUE, max.overlaps = Inf)  # variable plot
+# Variable plot: variables that are located close to each other on the plot have similar profiles, 
+# whereas those located far from each other have different profiles.
+
+fviz_mca_ind(res.mca, repel = TRUE, max.overlaps = Inf)  # individual plot
+# This is the individual plot. Observations that are close to each other have 
+# similar categories, while those that are far from each other have dissimilar categories.
+
+summary(res.mca)
+
+
+# Get the eigenvalues/principal components
+eig.val <- get_eigenvalue(res.mca)
+
+# Select the indices of the dimensions
+selected_dims <- which(eig.val[,1] >= 0.2) # 5 dims which explain 32% cumulative variance 
+
+# Create a new data frame with selected dimensions
+df1_mca <- as.data.frame(res.mca$ind$coord[,selected_dims])
+print(head(df1_mca))
+
+fviz_eig(res.mca, addlabels = TRUE, ylim = c(0, 10)) # Visualize dimension variance
+
+```
+
+```{r}
+res.var <- get_mca_var(res.mca)
+fviz_mca_var(res.mca, col.var="contrib",
+gradient.cols = c("grey","yellow","purple","red","blue"),ggrepel = TRUE ) + labs(title = "MCA Variable Variance")
+
+```
+
+```{r}
+# Extract variable contributions for dimensions 1 and 2
+var_contrib <- res.mca$var$contrib[, 1:2]
+
+# Calculate absolute contributions
+abs_var_contrib <- abs(var_contrib)
+
+# Get top 10 contributing variables for dimension 1
+top_dim1 <- order(abs_var_contrib[, 1], decreasing = TRUE)[1:10]
+
+# Get top 10 contributing variables for dimension 2
+top_dim2 <- order(abs_var_contrib[, 2], decreasing = TRUE)[1:10]
+
+print(paste("Dimension 1 top contributors: "))
+print(rownames(var_contrib)[top_dim1])
+
+print(paste("Dimension 2 top contributors: "))
+print(rownames(var_contrib)[top_dim2])
+
+print(paste("Common variables that are top contributors to both dimensions: "))
+common_top_contributors <- intersect(rownames(var_contrib)[top_dim1], rownames(var_contrib)[top_dim2])
+common_top_contributors
+
+```
+
+Data transformation
+```{r}
+# Turn chr variables into dummy variables and loop for converting all categorical into dummy vars
+# Loop over the list and count the number of levels in each variable
+for (var in variables) {
+  print(paste(var, ":", length(unique(df[[var]]))))
+}
+
+# Loop over the list and convert each variable into dummy variables including ring_number
+for (var in variables) {
+  # Skip the variable if it has only one level
+  if (length(unique(df[[var]])) < 2) {
+    next
+  }
+  
+  df[[var]] <- as.factor(df[[var]])
+  dummy <- model.matrix(~df[[var]] - 1, data = df)
+  dummy_df <- as.data.frame(dummy)
+  colnames(dummy_df) <- paste(var, colnames(dummy_df), sep = "_")
+  df <- cbind(df, dummy_df)
+}
+
+# str(df) # 8124 x 138
+df <- df %>% select(-c(variables)) # Remove redundancy from one-hot-encoding
+```
+
+
+Data normalization: There is no need for normalization since all independent variables
+are dummy variables in either 0 or 1
+```{r, include= FALSE}
+str(df) # 8124 x 117
+```
+
+Dimension Reduction
+1) Remove independent variables that have low correlation with target variable
+2) Remove multicollinearity, independent variables that have high correlation with each other 
+
+```{r}
+# Low correlation with target variable
+
+dv_factor <- df$poisonous # dv in factor
+dv_int <- as.integer(df$poisonous) # dv in num
+
+cor_index <- as.vector(cor(df[, -1], dv_int))
+plot(density(cor_index)) # Shows correlation density between iv and dv
+
+threshold <- 0.1 # Set correlation threshold and remove variables with lower correlation
+selected_indices <- which(abs(cor_index) > threshold) 
+selected_variables <- names(df)[selected_indices]
+df1 <- df[, c(selected_variables)]
+```
+```{r, include = FALSE}
+str(df1) # 8124 x 80 # Review structure
+```
+
+# Reorder columns so that they are ranked by number of unique values from highest to lowest. 
+rm(num_of_unique)
+num_of_unique <- c()
+
+for (x in 1:(length(df1-1))) {
+  num_of_unique = append(num_of_unique,length(unique(df1[, x])))
+}
+rkk <- rank(-num_of_unique, ties.method= "first")
+rkk<- append(rkk, length(df1))
+
+rm(reorder_index)
+reorder_index <- c()
+for (x in 1:(length(df1))) {
+  reorder_index = append(reorder_index,which(rkk == x))
+}
+df1_1 <- df1[, reorder_index]
+
+
+# In each highly correlated pair, remove the second element
+cor_matrix <- cor(df1_1[, -ncol(df1_1)]) # IV correlation matrix
+cor_upper <- cor_matrix * upper.tri(cor_matrix, diag = FALSE) # Matrix of 0 and correlation
+
+index <- apply(cor_upper, 1, function(x) paste(colnames(cor_upper)[which(abs(x) > 0.9)], collapse = ", "))
+# Store IV names if correlation absolute value is larger than certain threshold
+elements <- unique(unlist(strsplit(index, split = ", "))) 
+# Split names in one string to chr vector and remove duplicated IV names
+#elements 
+
+cols_to_keep <- setdiff(names(df1_1), elements)
+df2 <- df1_1[, cols_to_keep] # IVs remained at 0.9 threshold
+
+
+
+
+Feature Selection
+```{r}
+# Ridge Regression
+
+# Create a matrix from the predictor variables
+x <- model.matrix(df1$poisonous ~ ., df1)[,-1] # We exclude the intercept column using [,-1]
+
+# Create a vector from the target variable
+y <- as.integer(df1$poisonous)
+
+# Compute Ridge Regression
+set.seed(234)  # for reproducibility
+cv.ridge <- cv.glmnet(x, y, alpha = 0, nfolds = 10)
+
+# Output the lambda that gives the minimum mean cross-validated error
+lambda_min <- cv.ridge$lambda.min
+lambda_min
+
+# Fit the final model on the data using lambda.lasso
+model.ridge <- glmnet(x, y, alpha = 0, lambda = lambda_min)
+
+# Print coefficients of the Ridge Regression model
+print(coef(model.ridge))
+
+# Extract the coefficients
+ridge_coefs <- as.data.frame(as.matrix(coef(model.ridge)))
+
+# Make the row names into a column for variable names
+ridge_coefs$variable <- rownames(ridge_coefs)
+
+# Rename the V1 column to coefficient
+colnames(ridge_coefs)[colnames(ridge_coefs)=="s0"] <- "coefficient"
+
+# Remove the first row (which is the intercept term)
+ridge_coefs <- ridge_coefs[-1, ]
+
+# Create a new column with the absolute value of the coefficients
+ridge_coefs$abs_coefficient <- abs(ridge_coefs$coefficient)
+
+# Order the coefficients by their absolute values, in descending order
+ridge_coefs <- ridge_coefs[order(-ridge_coefs$abs_coefficient), ]
+
+# Print the top variables
+top_variables <- head(ridge_coefs, 15)
+print(top_variables)
+
+# Get the smallest absolute coefficient among the top 30 variables
+cutoff <- min(top_variables$abs_coefficient)
+cat("Cutoff for top variables: ", cutoff, "\n")
+
+# Get the variable names of the top variables
+top_var_names <- as.character(top_variables$variable)
+top_var_names_clean <- gsub(".*`(.*)`", "\\1", top_variables$variable)
+df3 <- cbind(df1[, top_var_names_clean], df1$poisonous) # Create df2 with only the top variables
+names(df3)[16] <- "poisonous"
+```
+
+```{r}
+# Shorten the variable names for visualization
+df4 <- df3
+
+names(df4)[1] <- "SCARYL"
+names(df4)[2] <- "GCGR"
+names(df4)[3] <- "ODNN"
+names(df4)[4] <- "SCBRYL"
+names(df4)[5] <- "SSARSL"
+names(df4)[6] <- "ODAN"
+names(df4)[7] <- "ODAM"
+names(df4)[8] <- "ODCR"
+names(df4)[9] <- "ODPG"
+names(df4)[10] <- "RYFL"
+names(df4)[11] <- "SRRT"
+names(df4)[12] <- "HBWT"
+names(df4)[13] <- "STCL"
+names(df4)[14] <- "RTPD"
+names(df4)[15] <- "HBUB"
+
+df3$poisonous <- as.integer(df3$poisonous)
+# Create a correlation matrix of the training set features.
+
+# Visualization_1: with numbers
+M1 = cor(df3)
+corrplot(M1, method = 'number') # colorful number
+
+# Visualization_2: Bubble dots
+M2 = cor(df3)
+# Compute p-values
+p.mat <- cor.mtest(df3)$p
+# Only plot significant correlations
+corrplot(M2, p.mat = p.mat, sig.level = 0.01)
+```
+
+
+
+```{r}
+par(mar = c(6, 4, 3, 2) + 0.5)
+cor_matrix <- round(cor(df3), 2)
+corrplot(cor_matrix, method = "color", type = "upper", tl.col = "black",
+         tl.srt = 50, tl.cex = 0.6, diag = FALSE, outline = TRUE,
+         col = colorRampPalette(c("seagreen", "white", "firebrick3"))(50),
+         addCoef.col = "black", number.cex = 0.5)
+title("Correlations Among Features", line = 2.7, cex.main = 1)
+
+```
+
+```{r}
+#Histogram of all the numerical variables
+df3[,c(1:16)] %>%
+  gather(key = Variable, value = Value) %>%
+  ggplot() +
+  geom_histogram(aes(x = Value), fill = "violet") +
+  facet_wrap(~Variable, scales='free') +
+  theme_classic() +
+  theme(aspect.ratio = 0.5, axis.title = element_blank(), panel.grid = element_blank())
+
+```
+
+
+Data Partition
+
+```{r}
+str(df4)
+```
+
+```{r}
+Norm_model <- preProcess(df3, method = c("center", "scale"))
+df3_norm <-predict(Norm_model,df3)
+head(df3_norm)
+str(df3_norm)
+```
+
+```{r}
+# Fit a linear regression model
+lm_model <- lm(poisonous ~ ., data = df3_norm)
+summary(lm_model)
+```
+
+```{r}
+#Perform ANOVA
+anova_results <- aov(poisonous ~ ., data = df3_norm)
+summary(anova_results)
+```
+
+```{r}
+set.seed(123)
+
+trainingIndex <- createDataPartition(df4$poisonous, p=0.8, list = FALSE)
+df_train <- df4[trainingIndex, ]
+df_test <- df4[- trainingIndex,]
+```
+
+
+
+```{r}
+set.seed(123)
+
+model <- train(poisonous ~ ., data = df_train, 
+                  method = "glm",
+                  family = "binomial",
+                  trControl = trainControl(method = "cv", number = 5))
+
+# Predict on the test set
+predictions <- predict(model, newdata = df_test)
+
+# Evaluate the model performance
+confusionMatrix(predictions, df_test$poisonous)
+```
+
